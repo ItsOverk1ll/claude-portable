@@ -28,10 +28,18 @@ foreach ($t in $targets) {
 $bin = "$home_\.local\bin"
 if ((Test-Path $bin) -and -not (Get-ChildItem $bin -Force)) {
     Remove-Item $bin -Force
-    $path = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $clean = ($path -split ';' | Where-Object { $_ -and $_.TrimEnd('\') -ne $bin }) -join ';'
-    [Environment]::SetEnvironmentVariable('Path', $clean, 'User')
-    Write-Host "Removed $bin from user PATH"
+    # Edit the raw registry value so other entries keep their %VARS% and the value keeps its type.
+    $key = Get-Item HKCU:\Environment
+    $raw = $key.GetValue('Path', $null, 'DoNotExpandEnvironmentNames')
+    if ($null -ne $raw) {
+        $kind = $key.GetValueKind('Path')
+        $kept = $raw -split ';' | Where-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ne $bin }
+        Set-ItemProperty HKCU:\Environment -Name Path -Value ($kept -join ';') -Type $kind
+        # Set and clear a dummy variable so Windows broadcasts the environment change to new terminals.
+        [Environment]::SetEnvironmentVariable('ClaudePortableRefresh', '1', 'User')
+        [Environment]::SetEnvironmentVariable('ClaudePortableRefresh', $null, 'User')
+        Write-Host "Removed $bin from user PATH"
+    }
 }
 # Remove parent folders the installer created, but only if they are now empty.
 foreach ($d in "$home_\.local\share", "$home_\.local\state", "$home_\.local", "$home_\.cache") {

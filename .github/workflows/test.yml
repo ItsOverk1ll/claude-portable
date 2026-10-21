@@ -58,4 +58,6 @@ jobs:
           Write-Host "PATH after:  $pathAfter"
 
           if ($diff) { throw "Leftover files after uninstall (listed above)" }
-          if ($pathAfter -ne $pathBefore) { throw "User PATH not restored (see above)" }
+          # Compare type plus entries; an empty trailing ';' is not a meaningful difference.
+          $norm = { param($s) $t, $p = $s -split '\|', 2; "$t|" + (($p -split ';' | Where-Object { $_ }) -join ';') }
+          if ((& $norm $pathAfter) -ne (& $norm $pathBefore)) { throw "User PATH not restored (see above)" }
