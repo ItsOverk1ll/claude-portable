@@ -53,7 +53,7 @@ Section "Install"
   Pop $0
   ${If} $0 != 0
     DetailPrint "Install script failed (exit code $0)."
-    MessageBox MB_ICONSTOP "Claude Code install failed. See the details window.$\nUse 'Claude Code (portable)' in Apps & features to clean up." /SD IDOK
+    MessageBox MB_ICONSTOP "Claude Code install failed. Log: $TEMP\claude-portable-install.log$\nUse 'Claude Code (portable)' in Apps & features to clean up." /SD IDOK
     SetErrorLevel 1
     Abort
   ${EndIf}

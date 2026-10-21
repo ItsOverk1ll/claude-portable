@@ -85,7 +85,9 @@ jobs:
         shell: pwsh
         run: |
           $p = Start-Process .\ClaudePortableSetup.exe -ArgumentList '/S' -Wait -PassThru
-          if ($p.ExitCode) { throw "Installer exit code $($p.ExitCode)" }
+          Write-Host "Installer exit code: $($p.ExitCode)"
+          Get-Content "$env:TEMP\claude-portable-install.log" -ErrorAction SilentlyContinue
+          if ($p.ExitCode) { exit 1 }
 
       - name: Verify install
         shell: pwsh

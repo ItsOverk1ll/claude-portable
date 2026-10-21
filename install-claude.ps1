@@ -2,6 +2,8 @@
 # Uses Anthropic's official installer; files land under the user's profile.
 
 $ErrorActionPreference = 'Stop'
+Start-Transcript -Path "$env:TEMP\claude-portable-install.log" -Force | Out-Null
+trap { Write-Host "ERROR: $_"; Stop-Transcript | Out-Null; exit 1 }
 
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Warning "Git for Windows was not found. Claude Code on Windows needs it (Git Bash)."
@@ -18,7 +20,7 @@ if (Test-Path $exe) {
     Write-Host "Open a NEW terminal and run: claude"
     Write-Host "When finished, run /logout inside Claude, then uninstall: uninstall-claude.bat,"
     Write-Host "or 'Claude Code (portable)' in Apps & features if you used the .exe installer."
+    Stop-Transcript | Out-Null
 } else {
-    Write-Error "claude.exe not found at expected path. Check the installer output above."
-    exit 1
+    throw "claude.exe not found at expected path. Check the installer output above."
 }
