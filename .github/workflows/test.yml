@@ -2,10 +2,12 @@ name: test-install-uninstall
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 jobs:
-  windows:
+  scripts:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -16,13 +18,7 @@ jobs:
 
       - name: Snapshot profile before
         shell: pwsh
-        run: |
-          Get-ChildItem $env:USERPROFILE -Force -Recurse -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName | Sort-Object | Set-Content $env:RUNNER_TEMP\before.txt
-          # Raw registry value (unexpanded) and its type, so the check catches %VAR% flattening too.
-          $k = Get-Item HKCU:\Environment
-          "$($k.GetValueKind('Path'))|$($k.GetValue('Path', '', 'DoNotExpandEnvironmentNames'))" |
-            Set-Content $env:RUNNER_TEMP\path_before.txt -NoNewline
+        run: ci/snapshot.ps1
 
       # Run the .bat launchers exactly as a user would; piped input satisfies `pause`.
       - name: Install
@@ -42,22 +38,104 @@ jobs:
 
       - name: Verify no leftovers
         shell: pwsh
+        run: ci/check-leftovers.ps1
+
+  build-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build installer
+        shell: pwsh
         run: |
-          Get-ChildItem $env:USERPROFILE -Force -Recurse -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName | Sort-Object | Set-Content $env:RUNNER_TEMP\after.txt
-          # Ignore Temp and PowerShell's own startup cache; both are touched by any PowerShell/Node run.
-          $ignore = '\\AppData\\Local\\Temp(\\|$)|\\PowerShell\\StartupProfileData'
-          $diff = Compare-Object (Get-Content $env:RUNNER_TEMP\before.txt) (Get-Content $env:RUNNER_TEMP\after.txt) |
-            Where-Object { $_.InputObject -notmatch $ignore }
-          if ($diff) { $diff | Format-Table -AutoSize | Out-String | Write-Host }
+          $mk = (Get-Command makensis -ErrorAction SilentlyContinue).Source
+          if (-not $mk) { $mk = "${env:ProgramFiles(x86)}\NSIS\makensis.exe" }
+          if (-not (Test-Path $mk)) {
+            choco install nsis -y --no-progress
+            $mk = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          }
+          $v = if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:GITHUB_REF_NAME.Substring(1) } else { '0.0.0' }
+          & $mk /V2 "/DVERSION=$v" installer.nsi
+          if ($LASTEXITCODE) { throw "makensis failed" }
 
-          $k = Get-Item HKCU:\Environment
-          $pathAfter = "$($k.GetValueKind('Path'))|$($k.GetValue('Path', '', 'DoNotExpandEnvironmentNames'))"
-          $pathBefore = Get-Content $env:RUNNER_TEMP\path_before.txt -Raw
-          Write-Host "PATH before: $pathBefore"
-          Write-Host "PATH after:  $pathAfter"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: ClaudePortableSetup.exe
 
-          if ($diff) { throw "Leftover files after uninstall (listed above)" }
-          # Compare type plus entries; an empty trailing ';' is not a meaningful difference.
-          $norm = { param($s) $t, $p = $s -split '\|', 2; "$t|" + (($p -split ';' | Where-Object { $_ }) -join ';') }
-          if ((& $norm $pathAfter) -ne (& $norm $pathBefore)) { throw "User PATH not restored (see above)" }
+  exe:
+    needs: build-exe
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+
+      - name: Snapshot profile before
+        shell: pwsh
+        run: ci/snapshot.ps1
+
+      - name: Install (silent)
+        shell: pwsh
+        run: |
+          $p = Start-Process .\ClaudePortableSetup.exe -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode) { throw "Installer exit code $($p.ExitCode)" }
+
+      - name: Verify install
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+          if (-not (Test-Path $exe)) { throw "claude.exe missing at $exe" }
+          & $exe --version
+          # PE machine type 0x8664 = x64; proves the 32-bit installer reached 64-bit PowerShell.
+          $b = [IO.File]::ReadAllBytes($exe)
+          $machine = [BitConverter]::ToUInt16($b, [BitConverter]::ToInt32($b, 0x3C) + 4)
+          if ($machine -ne 0x8664) { throw ("claude.exe is not x64 (machine 0x{0:X})" -f $machine) }
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudePortable'
+          Get-ItemProperty $key | Format-List DisplayName, DisplayVersion, UninstallString
+          if (-not (Test-Path "$env:LOCALAPPDATA\ClaudePortable\Uninstall.exe")) { throw "Uninstall.exe missing" }
+
+      - name: Uninstall (silent, via registered uninstaller)
+        shell: pwsh
+        run: |
+          $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ClaudePortable'
+          $cmd = (Get-ItemProperty $key).UninstallString.Trim('"')
+          Start-Process $cmd -ArgumentList '/S'
+          # The NSIS uninstaller re-launches itself from Temp, so wait for its effects instead.
+          $deadline = (Get-Date).AddMinutes(3)
+          while (((Test-Path $key) -or (Test-Path "$env:LOCALAPPDATA\ClaudePortable")) -and (Get-Date) -lt $deadline) {
+            Start-Sleep 2
+          }
+          if (Test-Path "$env:LOCALAPPDATA\ClaudePortable") { throw "Install folder still present after 3 minutes" }
+
+      - name: Verify no leftovers
+        shell: pwsh
+        run: |
+          Remove-Item ClaudePortableSetup.exe  # downloaded artifact, not an install leftover
+          ci/check-leftovers.ps1
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [scripts, exe]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: installer
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" ClaudePortableSetup.exe \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Claude Code Portable $GITHUB_REF_NAME" \
+            --notes "Per-user installer for Claude Code (no admin). Run ClaudePortableSetup.exe; uninstall via 'Claude Code (portable)' in Apps & features. Unsigned: Windows SmartScreen will warn (More info -> Run anyway)."
