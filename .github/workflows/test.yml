@@ -19,11 +19,15 @@ jobs:
         run: |
           Get-ChildItem $env:USERPROFILE -Force -Recurse -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty FullName | Sort-Object | Set-Content $env:RUNNER_TEMP\before.txt
-          [Environment]::GetEnvironmentVariable('Path','User') | Set-Content $env:RUNNER_TEMP\path_before.txt
+          # Raw registry value (unexpanded) and its type, so the check catches %VAR% flattening too.
+          $k = Get-Item HKCU:\Environment
+          "$($k.GetValueKind('Path'))|$($k.GetValue('Path', '', 'DoNotExpandEnvironmentNames'))" |
+            Set-Content $env:RUNNER_TEMP\path_before.txt -NoNewline
 
+      # Run the .bat launchers exactly as a user would; piped input satisfies `pause`.
       - name: Install
         shell: cmd
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File install-claude.ps1
+        run: echo.| install-claude.bat
 
       - name: Verify install
         shell: pwsh
@@ -34,7 +38,7 @@ jobs:
 
       - name: Uninstall
         shell: cmd
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File uninstall-claude.ps1
+        run: echo.| uninstall-claude.bat
 
       - name: Verify no leftovers
         shell: pwsh
@@ -46,6 +50,12 @@ jobs:
           $diff = Compare-Object (Get-Content $env:RUNNER_TEMP\before.txt) (Get-Content $env:RUNNER_TEMP\after.txt) |
             Where-Object { $_.InputObject -notmatch $ignore }
           if ($diff) { $diff | Format-Table -AutoSize | Out-String | Write-Host }
-          $pathAfter = [Environment]::GetEnvironmentVariable('Path','User')
-          if ($pathAfter -ne (Get-Content $env:RUNNER_TEMP\path_before.txt -Raw).Trim()) { Write-Warning "User PATH differs from before" }
+
+          $k = Get-Item HKCU:\Environment
+          $pathAfter = "$($k.GetValueKind('Path'))|$($k.GetValue('Path', '', 'DoNotExpandEnvironmentNames'))"
+          $pathBefore = Get-Content $env:RUNNER_TEMP\path_before.txt -Raw
+          Write-Host "PATH before: $pathBefore"
+          Write-Host "PATH after:  $pathAfter"
+
           if ($diff) { throw "Leftover files after uninstall (listed above)" }
+          if ($pathAfter -ne $pathBefore) { throw "User PATH not restored (see above)" }
