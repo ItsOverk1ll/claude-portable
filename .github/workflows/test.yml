@@ -1,0 +1,48 @@
+name: test-install-uninstall
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Snapshot profile before
+        shell: pwsh
+        run: |
+          Get-ChildItem $env:USERPROFILE -Force -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName | Sort-Object | Set-Content $env:RUNNER_TEMP\before.txt
+          [Environment]::GetEnvironmentVariable('Path','User') | Set-Content $env:RUNNER_TEMP\path_before.txt
+
+      - name: Install
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File install-claude.ps1
+
+      - name: Verify install
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+          if (-not (Test-Path $exe)) { throw "claude.exe missing at $exe" }
+          & $exe --version
+
+      - name: Uninstall
+        shell: cmd
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File uninstall-claude.ps1
+
+      - name: Verify no leftovers
+        shell: pwsh
+        run: |
+          Get-ChildItem $env:USERPROFILE -Force -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName | Sort-Object | Set-Content $env:RUNNER_TEMP\after.txt
+          $diff = Compare-Object (Get-Content $env:RUNNER_TEMP\before.txt) (Get-Content $env:RUNNER_TEMP\after.txt)
+          if ($diff) { $diff | Format-Table -AutoSize | Out-String | Write-Host }
+          $pathAfter = [Environment]::GetEnvironmentVariable('Path','User')
+          if ($pathAfter -ne (Get-Content $env:RUNNER_TEMP\path_before.txt -Raw).Trim()) { Write-Warning "User PATH differs from before" }
+          if ($diff) { throw "Leftover files after uninstall (listed above)" }
