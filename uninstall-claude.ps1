@@ -8,6 +8,8 @@ Get-Process claude -ErrorAction SilentlyContinue | Stop-Process -Force
 $targets = @(
     "$home_\.local\bin\claude.exe",
     "$home_\.local\share\claude",
+    "$home_\.local\state\claude",
+    "$home_\.cache\claude",
     "$home_\.claude",
     "$home_\.claude.json",
     "$home_\.claude.json.backup",
@@ -31,10 +33,10 @@ if ((Test-Path $bin) -and -not (Get-ChildItem $bin -Force)) {
     [Environment]::SetEnvironmentVariable('Path', $clean, 'User')
     Write-Host "Removed $bin from user PATH"
 }
-$share = "$home_\.local\share"
-if ((Test-Path $share) -and -not (Get-ChildItem $share -Force)) { Remove-Item $share -Force }
-$local = "$home_\.local"
-if ((Test-Path $local) -and -not (Get-ChildItem $local -Force)) { Remove-Item $local -Force }
+# Remove parent folders the installer created, but only if they are now empty.
+foreach ($d in "$home_\.local\share", "$home_\.local\state", "$home_\.local", "$home_\.cache") {
+    if ((Test-Path $d) -and -not (Get-ChildItem $d -Force)) { Remove-Item $d -Force }
+}
 
 Write-Host "`nDone. Leftover check:"
 Get-ChildItem $home_ -Force -Filter '.claude*' -ErrorAction SilentlyContinue

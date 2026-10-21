@@ -41,7 +41,10 @@ jobs:
         run: |
           Get-ChildItem $env:USERPROFILE -Force -Recurse -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty FullName | Sort-Object | Set-Content $env:RUNNER_TEMP\after.txt
-          $diff = Compare-Object (Get-Content $env:RUNNER_TEMP\before.txt) (Get-Content $env:RUNNER_TEMP\after.txt)
+          # Ignore Temp and PowerShell's own startup cache; both are touched by any PowerShell/Node run.
+          $ignore = '\\AppData\\Local\\Temp(\\|$)|\\PowerShell\\StartupProfileData'
+          $diff = Compare-Object (Get-Content $env:RUNNER_TEMP\before.txt) (Get-Content $env:RUNNER_TEMP\after.txt) |
+            Where-Object { $_.InputObject -notmatch $ignore }
           if ($diff) { $diff | Format-Table -AutoSize | Out-String | Write-Host }
           $pathAfter = [Environment]::GetEnvironmentVariable('Path','User')
           if ($pathAfter -ne (Get-Content $env:RUNNER_TEMP\path_before.txt -Raw).Trim()) { Write-Warning "User PATH differs from before" }
