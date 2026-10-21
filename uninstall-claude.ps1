@@ -1,4 +1,5 @@
-# Removes Claude Code CLI and its per-user data (login tokens, settings, history, cache).
+# Removes Claude Code CLI and its per-user data (login tokens, settings, history, cache),
+# plus anything install-claude.ps1 installed with winget (listed in installed.txt, e.g. Git).
 
 $ErrorActionPreference = 'Continue'
 $home_ = $env:USERPROFILE
@@ -45,6 +46,28 @@ if ((Test-Path $bin) -and -not (Get-ChildItem $bin -Force)) {
 foreach ($d in "$home_\.local\share", "$home_\.local\state", "$home_\.local", "$home_\.cache") {
     if ((Test-Path $d) -and -not (Get-ChildItem $d -Force)) { Remove-Item $d -Force }
 }
+
+# Uninstall only what install-claude.ps1 installed; programs that were already there stay.
+$appDir = Join-Path $env:LOCALAPPDATA 'ClaudePortable'
+$manifest = Join-Path $appDir 'installed.txt'
+if (Test-Path $manifest) {
+    $winget = (Get-Command winget -ErrorAction SilentlyContinue).Source
+    if (-not $winget) { $winget = "$env:LOCALAPPDATA\Microsoft\WindowsApps\winget.exe" }
+    $remaining = @()
+    foreach ($id in @(Get-Content $manifest | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+        Write-Host "Uninstalling $id with winget..."
+        $proc = Start-Process $winget -ArgumentList 'uninstall', '--id', $id, '-e', '--silent', '--disable-interactivity',
+            '--accept-source-agreements' -NoNewWindow -PassThru
+        $handle = $proc.Handle  # needed for ExitCode to be readable later
+        if (-not $proc.WaitForExit(600000)) { $proc.Kill() }
+        # 0x8A150014 (-1978335212): not installed anymore, nothing to do
+        if ($proc.HasExited -and $proc.ExitCode -in 0, -1978335212) { Write-Host "Removed $id" }
+        else { Write-Warning "winget failed to uninstall $id. Remove it from Settings > Apps."; $remaining += $id }
+    }
+    if ($remaining) { Set-Content $manifest $remaining }
+    else { Remove-Item $manifest -Force }
+}
+if ((Test-Path $appDir) -and -not (Get-ChildItem $appDir -Force)) { Remove-Item $appDir -Force }
 
 Write-Host "`nDone. Leftover check:"
 Get-ChildItem $home_ -Force -Filter '.claude*' -ErrorAction SilentlyContinue

@@ -31,6 +31,9 @@ Var PS
   ${Else}
     StrCpy $PS "$WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
   ${EndIf}
+  ; Launched from PowerShell 7, the inherited PSModulePath breaks Windows PowerShell's built-in
+  ; cmdlets (e.g. Get-FileHash). Clearing it lets powershell.exe rebuild its default.
+  System::Call 'Kernel32::SetEnvironmentVariable(t "PSModulePath", p 0)'
 !macroend
 
 Section "Install"
